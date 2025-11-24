@@ -1,0 +1,507 @@
+import React, { useEffect, useRef, useState, memo } from 'react'
+
+const AnimatedBackground = memo(function AnimatedBackground({ isDarkMode }) {
+  const canvasRef = useRef(null)
+  const containerRef = useRef(null)
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
+
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      setMousePosition({ x: e.clientX, y: e.clientY })
+    }
+
+    window.addEventListener('mousemove', handleMouseMove, { passive: true })
+    return () => window.removeEventListener('mousemove', handleMouseMove)
+  }, [])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const ctx = canvas.getContext('2d', { alpha: true })
+    let particles = []
+    let mouse = { x: 0, y: 0 }
+    let rafId = null
+
+    let mouseUpdateRaf = null
+    const updateMouse = (e) => {
+      if (!mouseUpdateRaf) {
+        mouseUpdateRaf = requestAnimationFrame(() => {
+          mouse.x = e.clientX
+          mouse.y = e.clientY
+          mouseUpdateRaf = null
+        })
+      }
+    }
+    window.addEventListener('mousemove', updateMouse, { passive: true })
+
+    const resizeCanvas = () => {
+      const dpr = window.devicePixelRatio || 1
+      const width = window.innerWidth
+      const height = window.innerHeight
+      
+      // Set actual size in memory (scaled for DPI)
+      canvas.width = width * dpr
+      canvas.height = height * dpr
+      
+      // Reset transformation matrix and scale context to account for DPI
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.scale(dpr, dpr)
+      
+      // Set CSS size (display size, not actual canvas size)
+      canvas.style.width = width + 'px'
+      canvas.style.height = height + 'px'
+      
+      // Reset particle positions to fit new canvas (use display size, not scaled)
+      particles.forEach(particle => {
+        if (particle.x < 0 || particle.x > width) particle.x = Math.random() * width
+        if (particle.y < 0 || particle.y > height) particle.y = Math.random() * height
+      })
+    }
+    resizeCanvas()
+    
+    // Debounce resize for better performance
+    let resizeTimeout
+    const debouncedResize = () => {
+      clearTimeout(resizeTimeout)
+      resizeTimeout = setTimeout(resizeCanvas, 150)
+    }
+    window.addEventListener('resize', debouncedResize, { passive: true })
+
+    class Particle {
+      constructor() {
+        this.reset()
+        this.baseSize = Math.random() * 2 + 1
+        this.targetSize = this.baseSize
+      }
+
+      reset() {
+        this.x = Math.random() * canvas.width
+        this.y = Math.random() * canvas.height
+        this.size = Math.random() * 2 + 1
+        this.speedX = (Math.random() - 0.5) * 0.4
+        this.speedY = (Math.random() - 0.5) * 0.4
+        this.opacity = isDarkMode 
+          ? Math.random() * 0.4 + 0.5
+          : Math.random() * 0.5 + 0.5
+        this.baseOpacity = this.opacity
+        this.hue = isDarkMode 
+          ? Math.random() * 40 + 250
+          : Math.random() * 40 + 260
+        this.pulseSpeed = Math.random() * 0.01 + 0.005
+        this.pulsePhase = Math.random() * Math.PI * 2
+        this.angle = Math.random() * Math.PI * 2
+        this.rotationSpeed = (Math.random() - 0.5) * 0.015
+      }
+
+      update() {
+        this.x += this.speedX
+        this.y += this.speedY
+
+        if (this.x < 0) this.x = canvas.width
+        if (this.x > canvas.width) this.x = 0
+        if (this.y < 0) this.y = canvas.height
+        if (this.y > canvas.height) this.y = 0
+
+        const dx = mouse.x - this.x
+        const dy = mouse.y - this.y
+        const distSq = dx * dx + dy * dy
+        const maxDistSq = 250 * 250
+
+        if (distSq < maxDistSq) {
+          const distance = Math.sqrt(distSq)
+          const force = (250 - distance) / 250
+          const angle = Math.atan2(dy, dx)
+          this.x -= Math.cos(angle) * force * 2.5
+          this.y -= Math.sin(angle) * force * 2.5
+          this.targetSize = this.baseSize * (1 + force * 0.65)
+          this.opacity = Math.min(this.baseOpacity * (1 + force * 2.5), isDarkMode ? 1.0 : 0.9)
+        } else {
+          this.targetSize = this.baseSize
+          this.opacity = this.baseOpacity
+        }
+
+        this.size += (this.targetSize - this.size) * 0.12
+
+        this.pulsePhase += this.pulseSpeed
+        this.angle += this.rotationSpeed
+      }
+
+      draw() {
+        const glowRadius = this.size * 10
+        
+        const gradient = ctx.createRadialGradient(
+          this.x, this.y, 0,
+          this.x, this.y, glowRadius
+        )
+        
+        if (isDarkMode) {
+          gradient.addColorStop(0, `hsla(${this.hue}, 90%, 75%, ${this.opacity * 1.1})`)
+          gradient.addColorStop(0.5, `hsla(${this.hue}, 85%, 70%, ${this.opacity * 0.6})`)
+          gradient.addColorStop(1, 'transparent')
+        } else {
+          gradient.addColorStop(0, `hsla(${this.hue}, 85%, 55%, ${this.opacity * 1.3})`)
+          gradient.addColorStop(0.5, `hsla(${this.hue}, 80%, 50%, ${this.opacity * 1.0})`)
+          gradient.addColorStop(1, 'transparent')
+        }
+        
+        ctx.fillStyle = gradient
+        ctx.beginPath()
+        ctx.arc(this.x, this.y, glowRadius, 0, Math.PI * 2)
+        ctx.fill()
+        
+        ctx.save()
+        ctx.translate(this.x, this.y)
+        ctx.rotate(this.angle)
+        ctx.globalAlpha = this.opacity
+        ctx.fillStyle = isDarkMode 
+          ? `hsla(${this.hue}, 90%, 80%, ${this.opacity * 1.8})`
+          : `hsla(${this.hue}, 85%, 50%, ${this.opacity * 2.2})`
+        
+        ctx.beginPath()
+        const spikes = 5
+        const outerRadius = this.size
+        const innerRadius = this.size * 0.5
+        for (let i = 0; i < spikes * 2; i++) {
+          const radius = i % 2 === 0 ? outerRadius : innerRadius
+          const angle = (i * Math.PI) / spikes - Math.PI / 2
+          const x = Math.cos(angle) * radius
+          const y = Math.sin(angle) * radius
+          if (i === 0) {
+            ctx.moveTo(x, y)
+          } else {
+            ctx.lineTo(x, y)
+          }
+        }
+        ctx.closePath()
+        ctx.fill()
+        ctx.restore()
+      }
+    }
+
+    const initParticles = () => {
+      particles = []
+      // Reduced particle count for better performance on Railway/hosting
+      // Use devicePixelRatio to adjust for high-DPI displays
+      const pixelRatio = window.devicePixelRatio || 1
+      const baseCount = pixelRatio > 1 ? 35 : 40
+      const particleCount = isDarkMode ? baseCount : baseCount - 5
+      for (let i = 0; i < particleCount; i++) {
+        particles.push(new Particle())
+      }
+    }
+
+    initParticles()
+
+    const drawConnections = () => {
+      const maxDist = 180
+      const maxDistSq = maxDist * maxDist
+      const connections = []
+      
+      const maxConnectionsPerParticle = 3
+      
+      for (let i = 0; i < particles.length; i++) {
+        let connectionCount = 0
+        for (let j = i + 1; j < particles.length && connectionCount < maxConnectionsPerParticle; j++) {
+          const dx = particles[i].x - particles[j].x
+          const dy = particles[i].y - particles[j].y
+          const distSq = dx * dx + dy * dy
+
+          if (distSq < maxDistSq) {
+            const distance = Math.sqrt(distSq)
+            const opacity = isDarkMode 
+              ? (1 - distance / maxDist) * 0.5
+              : (1 - distance / maxDist) * 0.8
+            
+            connections.push({
+              x1: particles[i].x,
+              y1: particles[i].y,
+              x2: particles[j].x,
+              y2: particles[j].y,
+              hue1: particles[i].hue,
+              hue2: particles[j].hue,
+              opacity
+            })
+            connectionCount++
+          }
+        }
+      }
+
+      connections.forEach(conn => {
+        const lineGradient = ctx.createLinearGradient(conn.x1, conn.y1, conn.x2, conn.y2)
+        const midHue = (conn.hue1 + conn.hue2) / 2
+        
+        if (isDarkMode) {
+          lineGradient.addColorStop(0, `hsla(${conn.hue1}, 85%, 70%, ${conn.opacity})`)
+          lineGradient.addColorStop(0.5, `hsla(${midHue}, 90%, 75%, ${conn.opacity * 1.2})`)
+          lineGradient.addColorStop(1, `hsla(${conn.hue2}, 85%, 70%, ${conn.opacity})`)
+        } else {
+          lineGradient.addColorStop(0, `hsla(${conn.hue1}, 80%, 50%, ${conn.opacity})`)
+          lineGradient.addColorStop(0.5, `hsla(${midHue}, 85%, 55%, ${conn.opacity * 1.3})`)
+          lineGradient.addColorStop(1, `hsla(${conn.hue2}, 80%, 50%, ${conn.opacity})`)
+        }
+        
+        ctx.strokeStyle = lineGradient
+        ctx.lineWidth = 2
+        ctx.lineCap = 'round'
+        ctx.beginPath()
+        ctx.moveTo(conn.x1, conn.y1)
+        ctx.lineTo(conn.x2, conn.y2)
+        ctx.stroke()
+      })
+    }
+
+    // Performance optimization: detect if page is hidden
+    let lastTime = 0
+    const targetFPS = 60
+    const frameInterval = 1000 / targetFPS
+
+    const animate = (currentTime) => {
+      rafId = requestAnimationFrame(animate)
+      
+      // Throttle to target FPS for better performance
+      const deltaTime = currentTime - lastTime
+      if (deltaTime < frameInterval) return
+      lastTime = currentTime - (deltaTime % frameInterval)
+
+      // Skip animation if page is hidden
+      if (document.hidden) return
+
+      // Use save/restore for better performance
+      ctx.save()
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+      particles.forEach(particle => {
+        particle.update()
+      })
+
+      drawConnections()
+
+      particles.forEach(particle => {
+        particle.draw()
+      })
+      
+      ctx.restore()
+    }
+
+    animate(0)
+
+    return () => {
+      window.removeEventListener('resize', debouncedResize)
+      window.removeEventListener('mousemove', updateMouse)
+      if (resizeTimeout) {
+        clearTimeout(resizeTimeout)
+      }
+      if (rafId) {
+        cancelAnimationFrame(rafId)
+      }
+      if (mouseUpdateRaf) {
+        cancelAnimationFrame(mouseUpdateRaf)
+      }
+    }
+  }, [isDarkMode])
+
+  return (
+    <div 
+      ref={containerRef} 
+      className="fixed inset-0 overflow-hidden pointer-events-none -z-10"
+      style={{ willChange: 'transform', transform: 'translateZ(0)' }}
+    >
+      <div
+        className={`absolute inset-0 ${isDarkMode ? 'opacity-30' : 'opacity-70'}`}
+        style={{
+          background: isDarkMode
+            ? 'radial-gradient(ellipse 80% 50% at 50% 0%, rgba(139, 92, 246, 0.2), transparent), radial-gradient(ellipse 80% 50% at 50% 100%, rgba(168, 85, 247, 0.2), transparent), radial-gradient(ellipse 50% 80% at 0% 50%, rgba(192, 132, 252, 0.15), transparent), radial-gradient(ellipse 50% 80% at 100% 50%, rgba(147, 51, 234, 0.15), transparent)'
+            : 'radial-gradient(ellipse 80% 50% at 50% 0%, rgba(192, 132, 252, 0.5), transparent), radial-gradient(ellipse 80% 50% at 50% 100%, rgba(168, 85, 247, 0.5), transparent), radial-gradient(ellipse 50% 80% at 0% 50%, rgba(139, 92, 246, 0.45), transparent), radial-gradient(ellipse 50% 80% at 100% 50%, rgba(147, 51, 234, 0.45), transparent)',
+          backgroundBlendMode: 'overlay',
+        }}
+      />
+
+      <div className="absolute inset-0 overflow-hidden">
+        <div
+          className={`animated-background-layer absolute -top-40 -left-40 w-[800px] h-[800px] rounded-full blur-[120px] ${
+            isDarkMode
+              ? 'bg-gradient-to-r from-purple-600/40 via-violet-600/30 to-indigo-600/40'
+              : 'bg-gradient-to-r from-purple-400/70 via-violet-400/65 to-indigo-400/70'
+          }`}
+          style={{
+            animation: 'luxuryBlob 30s ease-in-out infinite',
+          }}
+        />
+        
+        <div
+          className={`animated-background-layer absolute -top-40 -right-40 w-[900px] h-[900px] rounded-full blur-[140px] ${
+            isDarkMode
+              ? 'bg-gradient-to-r from-purple-500/35 via-fuchsia-500/30 to-pink-500/35'
+              : 'bg-gradient-to-r from-purple-400/65 via-fuchsia-400/60 to-pink-400/65'
+          }`}
+          style={{
+            animation: 'luxuryBlob 35s ease-in-out infinite',
+            animationDelay: '-8s',
+          }}
+        />
+        
+        <div
+          className={`animated-background-layer absolute -bottom-40 -left-40 w-[850px] h-[850px] rounded-full blur-[130px] ${
+            isDarkMode
+              ? 'bg-gradient-to-r from-violet-500/30 via-purple-500/25 to-indigo-500/30'
+              : 'bg-gradient-to-r from-violet-400/60 via-purple-400/55 to-indigo-400/60'
+          }`}
+          style={{
+            animation: 'luxuryBlob 40s ease-in-out infinite',
+            animationDelay: '-15s',
+          }}
+        />
+        
+        <div
+          className={`animated-background-layer absolute -bottom-40 -right-40 w-[750px] h-[750px] rounded-full blur-[110px] ${
+            isDarkMode
+              ? 'bg-gradient-to-r from-indigo-500/35 via-purple-500/30 to-violet-500/35'
+              : 'bg-gradient-to-r from-indigo-400/65 via-purple-400/60 to-violet-400/65'
+          }`}
+          style={{
+            animation: 'luxuryBlob 32s ease-in-out infinite',
+            animationDelay: '-12s',
+          }}
+        />
+        
+        <div
+          className={`animated-background-layer absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full blur-[100px] ${
+            isDarkMode
+              ? 'bg-gradient-to-r from-violet-500/25 via-purple-500/20 to-fuchsia-500/25'
+              : 'bg-gradient-to-r from-violet-400/55 via-purple-400/50 to-fuchsia-400/55'
+          }`}
+          style={{
+            animation: 'luxuryBlob 45s ease-in-out infinite',
+            animationDelay: '-22s',
+          }}
+        />
+      </div>
+
+      <div
+        className={`absolute inset-0 ${
+          isDarkMode ? 'opacity-[0.08]' : 'opacity-[0.25]'
+        }`}
+        style={{
+          backgroundImage: `
+            linear-gradient(${isDarkMode ? 'rgba(168, 85, 247, 0.2)' : 'rgba(192, 132, 252, 0.5)'} 1px, transparent 1px),
+            linear-gradient(90deg, ${isDarkMode ? 'rgba(168, 85, 247, 0.2)' : 'rgba(192, 132, 252, 0.5)'} 1px, transparent 1px)
+          `,
+          backgroundSize: '80px 80px',
+          animation: 'luxuryGrid 30s linear infinite',
+          maskImage: 'radial-gradient(ellipse 80% 50% at center, black 40%, transparent 70%)',
+          WebkitMaskImage: 'radial-gradient(ellipse 80% 50% at center, black 40%, transparent 70%)',
+        }}
+      />
+
+      <div
+        className={`absolute inset-0 ${
+          isDarkMode ? 'opacity-[0.06]' : 'opacity-[0.2]'
+        }`}
+        style={{
+          background: `linear-gradient(
+            135deg,
+            transparent 0%,
+            ${isDarkMode ? 'rgba(168, 85, 247, 0.15)' : 'rgba(192, 132, 252, 0.4)'} 25%,
+            ${isDarkMode ? 'rgba(139, 92, 246, 0.15)' : 'rgba(168, 85, 247, 0.4)'} 50%,
+            ${isDarkMode ? 'rgba(147, 51, 234, 0.15)' : 'rgba(139, 92, 246, 0.4)'} 75%,
+            transparent 100%
+          )`,
+          backgroundSize: '300% 300%',
+          animation: 'luxuryShimmer 20s ease-in-out infinite',
+        }}
+      />
+
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0"
+        style={{ 
+          mixBlendMode: isDarkMode ? 'screen' : 'normal',
+          opacity: isDarkMode ? 1.0 : 1.0,
+          willChange: 'contents',
+          transform: 'translateZ(0)', // GPU acceleration
+        }}
+      />
+
+      <div className="absolute inset-0 overflow-hidden">
+        <div
+          className={`animated-background-layer absolute top-1/4 left-1/4 w-96 h-96 rounded-full blur-[150px] ${
+            isDarkMode ? 'bg-purple-500/25' : 'bg-purple-400/55'
+          }`}
+          style={{
+            animation: 'luxuryFloat 25s ease-in-out infinite',
+            boxShadow: isDarkMode
+              ? '0 0 200px rgba(168, 85, 247, 0.4), 0 0 400px rgba(168, 85, 247, 0.2)'
+              : '0 0 250px rgba(192, 132, 252, 0.7), 0 0 500px rgba(192, 132, 252, 0.5)',
+          }}
+        />
+        <div
+          className={`animated-background-layer absolute bottom-1/4 right-1/4 w-[420px] h-[420px] rounded-full blur-[160px] ${
+            isDarkMode ? 'bg-violet-500/20' : 'bg-violet-400/50'
+          }`}
+          style={{
+            animation: 'luxuryFloat 30s ease-in-out infinite',
+            animationDelay: '-8s',
+            boxShadow: isDarkMode
+              ? '0 0 220px rgba(139, 92, 246, 0.4), 0 0 450px rgba(139, 92, 246, 0.2)'
+              : '0 0 270px rgba(167, 139, 250, 0.7), 0 0 550px rgba(167, 139, 250, 0.5)',
+          }}
+        />
+        <div
+          className={`animated-background-layer absolute top-1/2 right-1/3 w-80 h-80 rounded-full blur-[140px] ${
+            isDarkMode ? 'bg-indigo-500/20' : 'bg-indigo-400/50'
+          }`}
+          style={{
+            animation: 'luxuryFloat 28s ease-in-out infinite',
+            animationDelay: '-14s',
+            boxShadow: isDarkMode
+              ? '0 0 200px rgba(99, 102, 241, 0.4), 0 0 400px rgba(99, 102, 241, 0.2)'
+              : '0 0 250px rgba(129, 140, 248, 0.7), 0 0 500px rgba(129, 140, 248, 0.5)',
+          }}
+        />
+        <div
+          className={`animated-background-layer absolute bottom-1/3 left-1/3 w-72 h-72 rounded-full blur-[130px] ${
+            isDarkMode ? 'bg-fuchsia-500/18' : 'bg-fuchsia-400/48'
+          }`}
+          style={{
+            animation: 'luxuryFloat 22s ease-in-out infinite',
+            animationDelay: '-10s',
+            boxShadow: isDarkMode
+              ? '0 0 180px rgba(217, 70, 239, 0.4), 0 0 380px rgba(217, 70, 239, 0.2)'
+              : '0 0 230px rgba(240, 171, 252, 0.7), 0 0 480px rgba(240, 171, 252, 0.5)',
+          }}
+        />
+      </div>
+
+      <div
+        className="absolute inset-0"
+        style={{
+          background: isDarkMode
+            ? 'radial-gradient(ellipse 100% 60% at 50% 0%, transparent 0%, rgba(15, 23, 42, 0.4) 100%), radial-gradient(ellipse 100% 60% at 50% 100%, transparent 0%, rgba(15, 23, 42, 0.3) 100%)'
+            : 'radial-gradient(ellipse 100% 60% at 50% 0%, transparent 0%, rgba(249, 250, 251, 0.6) 100%), radial-gradient(ellipse 100% 60% at 50% 100%, transparent 0%, rgba(249, 250, 251, 0.5) 100%)',
+          pointerEvents: 'none',
+        }}
+      />
+
+      <div
+        className="absolute pointer-events-none transition-opacity duration-300"
+        style={{
+          left: `${mousePosition.x}px`,
+          top: `${mousePosition.y}px`,
+          transform: 'translate(-50%, -50%)',
+          width: '800px',
+          height: '800px',
+          borderRadius: '50%',
+          background: isDarkMode
+            ? 'radial-gradient(circle, rgba(168, 85, 247, 0.4) 0%, rgba(139, 92, 246, 0.3) 30%, rgba(147, 51, 234, 0.2) 50%, transparent 70%)'
+            : 'radial-gradient(circle, rgba(192, 132, 252, 0.6) 0%, rgba(168, 85, 247, 0.5) 30%, rgba(139, 92, 246, 0.4) 50%, transparent 70%)',
+          filter: 'blur(100px)',
+          opacity: mousePosition.x > 0 && mousePosition.y > 0 ? 1 : 0,
+          transition: 'opacity 0.2s ease, transform 0.1s ease',
+        }}
+      />
+    </div>
+  )
+})
+
+export default AnimatedBackground
